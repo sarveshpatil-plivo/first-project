@@ -17,14 +17,19 @@ app.secret_key = os.getenv("SECRET_KEY", "vercel-secret-key-change-this")
 # ============ Redis Setup ============
 REDIS_URL = os.getenv("REDIS_URL")
 redis_client = None
+redis_error = None
 
 if REDIS_URL:
     try:
         import redis
-        redis_client = redis.from_url(REDIS_URL, ssl_cert_reqs=None)
+        # Redis Cloud requires SSL - convert redis:// to rediss:// if needed
+        url = REDIS_URL
+        if "redislabs.com" in url and url.startswith("redis://"):
+            url = url.replace("redis://", "rediss://", 1)
+        redis_client = redis.from_url(url, ssl_cert_reqs=None)
         redis_client.ping()
     except Exception as e:
-        print(f"Redis connection failed: {e}")
+        redis_error = str(e)
         redis_client = None
 
 SESSION_TTL = 1800  # 30 minutes
@@ -251,7 +256,7 @@ def health():
             result["checks"]["redis"] = f"error: {str(e)}"
             result["status"] = "unhealthy"
     elif REDIS_URL:
-        result["checks"]["redis"] = "connection failed at startup"
+        result["checks"]["redis"] = f"connection failed: {redis_error}"
     else:
         result["checks"]["redis"] = "not configured (no REDIS_URL)"
 
