@@ -14,16 +14,17 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "vercel-secret-key-change-this")
 
-# ============ Redis Setup (Vercel KV / Upstash) ============
-REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
+# ============ Redis Setup ============
+REDIS_URL = os.getenv("REDIS_URL")
 redis_client = None
 
 if REDIS_URL:
     try:
         import redis
-        redis_client = redis.from_url(REDIS_URL)
+        redis_client = redis.from_url(REDIS_URL, ssl_cert_reqs=None)
         redis_client.ping()
-    except:
+    except Exception as e:
+        print(f"Redis connection failed: {e}")
         redis_client = None
 
 SESSION_TTL = 1800  # 30 minutes
@@ -249,8 +250,10 @@ def health():
         except Exception as e:
             result["checks"]["redis"] = f"error: {str(e)}"
             result["status"] = "unhealthy"
+    elif REDIS_URL:
+        result["checks"]["redis"] = "connection failed at startup"
     else:
-        result["checks"]["redis"] = "not configured"
+        result["checks"]["redis"] = "not configured (no REDIS_URL)"
 
     return jsonify(result)
 
