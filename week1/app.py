@@ -13,16 +13,15 @@ app.register_blueprint(ivr)  # Register IVR routes
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # Redis connection (optional - for session caching)
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = None
-if REDIS_URL:
-    try:
-        redis_client = redis.from_url(REDIS_URL)
-        redis_client.ping()
-        print("✓ Connected to Redis")
-    except:
-        print("⚠ Redis not available, using local sessions")
-        redis_client = None
+try:
+    redis_client = redis.from_url(REDIS_URL)
+    redis_client.ping()
+    print("✓ Connected to Redis")
+except:
+    print("⚠ Redis not available, using local sessions")
+    redis_client = None
 
 
 @app.route("/simulator")
@@ -122,8 +121,9 @@ def health():
 
     # Test PostgreSQL/Database
     try:
+        from sqlalchemy import text
         db = get_db()
-        db.execute("SELECT 1")  # Simple query to test connection
+        db.execute(text("SELECT 1"))  # Simple query to test connection
         db.close()
         result["checks"]["database"] = "ok"
     except Exception as e:

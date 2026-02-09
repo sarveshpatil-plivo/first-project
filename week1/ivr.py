@@ -1,7 +1,43 @@
 from flask import Blueprint, request, Response
 from models import get_db, CallLog
+import redis
+import json
+import os
+from datetime import datetime
 
 ivr = Blueprint("ivr", __name__)
+
+# Redis connection for session management
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+try:
+    redis_client = redis.from_url(REDIS_URL)
+    redis_client.ping()
+except:
+    redis_client = None
+
+SESSION_TTL = 1800  # 30 minutes
+
+
+def save_session(caller_id, step):
+    """Save or update caller session in Redis."""
+    if not redis_client:
+        return
+
+    key = f"session:{caller_id}"
+    existing = redis_client.get(key)
+
+    if existing:
+        data = json.loads(existing.decode())
+        data["step"] = step
+        data["updated_at"] = datetime.utcnow().isoformat()
+    else:
+        data = {
+            "caller_id": caller_id,
+            "step": step,
+            "started_at": datetime.utcnow().isoformat()
+        }
+
+    redis_client.setex(key, SESSION_TTL, json.dumps(data))
 
 
 def xml_response(xml_content):
@@ -14,12 +50,15 @@ def incoming_call():
     """Handle incoming calls - play welcome message and menu."""
     caller = request.values.get("From", "unknown")
 
-    # Log the call
+    # Log the call to PostgreSQL
     db = get_db()
     call = CallLog(caller_number=caller, call_status="answered")
     db.add(call)
     db.commit()
     db.close()
+
+    # Save session to Redis (step: greeting)
+    save_session(caller, "greeting")
 
     # Get base URL for absolute paths
     base_url = "https://tamala-dilapidated-yaretzi.ngrok-free.dev"
@@ -55,6 +94,9 @@ def handle_menu():
             db.commit()
         db.close()
 
+        # Update Redis session
+        save_session(caller, "routed_sales")
+
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>You pressed 1 for Sales. Our sales team is available Monday through Friday, 9 AM to 5 PM. Thank you for your interest.</Speak>
@@ -72,6 +114,9 @@ def handle_menu():
             db.commit()
         db.close()
 
+        # Update Redis session
+        save_session(caller, "routed_support")
+
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>You pressed 2 for Support. For urgent issues, please email support at support@example.com. A team member will respond within 24 hours.</Speak>
@@ -83,6 +128,10 @@ def handle_menu():
 
     elif digits == "3":
         db.close()
+
+        # Update Redis session
+        save_session(caller, "caller_id_readback")
+
         # Read back the caller's phone number
         # Format phone number for speech (add spaces between digits)
         phone_for_speech = " ".join(caller.replace("+", ""))
