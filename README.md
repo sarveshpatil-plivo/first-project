@@ -1,6 +1,6 @@
 # Voice IVR Project
 
-An AI-powered Voice IVR system built with Flask, Plivo, and OpenAI.
+A production-ready Voice IVR system with AI capabilities.
 
 ## Features
 
