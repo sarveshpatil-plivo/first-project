@@ -205,10 +205,12 @@ def call_status():
 
 @app.route("/voice/test", methods=["GET", "POST"])
 def test_voice():
-    """Simple test - just speak and hang up."""
+    """Simple test - wait then speak."""
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Speak>Hello! This is a test. If you can hear this, the system is working.</Speak>
+    <Wait length="3"/>
+    <Speak voice="WOMAN" language="en-US">Hello! This is a test message.</Speak>
+    <Wait length="5"/>
 </Response>"""
     return xml_response(xml)
 
