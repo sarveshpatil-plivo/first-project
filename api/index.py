@@ -1,25 +1,62 @@
 import os
 import sys
+import json
+from datetime import datetime
 
 # Add parent directory to path so we can import our modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, jsonify, request, session, render_template
+from flask import Flask, jsonify, request, Response
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__, template_folder='../templates')
+app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "vercel-secret-key-change-this")
 
-# Database URL - use PostgreSQL in production
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///local.db")
+# ============ Redis Setup (Vercel KV / Upstash) ============
+REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
+redis_client = None
 
-# Import and configure database only if not SQLite (Vercel doesn't persist files)
-if "postgresql" in DATABASE_URL:
-    from sqlalchemy import create_engine, Column, Integer, String, DateTime
+if REDIS_URL:
+    try:
+        import redis
+        redis_client = redis.from_url(REDIS_URL)
+        redis_client.ping()
+    except:
+        redis_client = None
+
+SESSION_TTL = 1800  # 30 minutes
+
+
+def save_session(caller_id, step):
+    """Save or update caller session in Redis."""
+    if not redis_client:
+        return
+
+    key = f"session:{caller_id}"
+    existing = redis_client.get(key)
+
+    if existing:
+        data = json.loads(existing.decode())
+        data["step"] = step
+        data["updated_at"] = datetime.utcnow().isoformat()
+    else:
+        data = {
+            "caller_id": caller_id,
+            "step": step,
+            "started_at": datetime.utcnow().isoformat()
+        }
+
+    redis_client.setex(key, SESSION_TTL, json.dumps(data))
+
+
+# ============ Database Setup ============
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+    from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
     from sqlalchemy.orm import sessionmaker, declarative_base
-    from datetime import datetime
 
     Base = declarative_base()
 
@@ -40,8 +77,6 @@ if "postgresql" in DATABASE_URL:
 
     engine = create_engine(DATABASE_URL)
     SessionLocal = sessionmaker(bind=engine)
-
-    # Create tables
     Base.metadata.create_all(engine)
 
     def get_db():
@@ -75,7 +110,6 @@ else:
 # ============ IVR Routes ============
 
 def xml_response(xml_content):
-    from flask import Response
     return Response(xml_content, mimetype="application/xml")
 
 
@@ -83,11 +117,15 @@ def xml_response(xml_content):
 def incoming_call():
     caller = request.values.get("From", "unknown")
 
+    # Log to PostgreSQL
     db = get_db()
     call = CallLog(caller_number=caller, call_status="answered")
     db.add(call)
     db.commit()
     db.close()
+
+    # Save session to Redis
+    save_session(caller, "greeting")
 
     base_url = "https://demo-ivr.vercel.app"
 
@@ -110,6 +148,7 @@ def handle_menu():
     base_url = "https://demo-ivr.vercel.app"
 
     if digits == "1":
+        save_session(caller, "routed_sales")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>You pressed 1 for Sales. Our sales team is available Monday through Friday, 9 AM to 5 PM. Thank you for your interest.</Speak>
@@ -120,6 +159,7 @@ def handle_menu():
 </Response>"""
 
     elif digits == "2":
+        save_session(caller, "routed_support")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>You pressed 2 for Support. For urgent issues, please email support at support@example.com. A team member will respond within 24 hours.</Speak>
@@ -130,7 +170,7 @@ def handle_menu():
 </Response>"""
 
     elif digits == "3":
-        # Read back the caller's phone number
+        save_session(caller, "caller_id_readback")
         phone_for_speech = " ".join(caller.replace("+", ""))
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -142,6 +182,7 @@ def handle_menu():
 </Response>"""
 
     else:
+        save_session(caller, "invalid_input")
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>Invalid option. Please try again.</Speak>
@@ -168,26 +209,50 @@ def home():
         "status": "healthy",
         "endpoints": {
             "/": "This page",
-            "/health": "Health check",
+            "/health": "Health check with Redis & DB status",
             "/voice/incoming": "Plivo webhook for incoming calls",
             "/voice/menu": "Plivo webhook for menu handling",
-            "/simulator": "IVR phone simulator"
+            "/calls": "View call logs",
+            "/call-history/<phone>": "Get calls from specific number",
+            "/sessions": "View active Redis sessions"
         }
     })
 
 
 @app.route("/health")
 def health():
-    return jsonify({
+    result = {
         "status": "healthy",
-        "database": "postgresql" if "postgresql" in DATABASE_URL else "mock",
-        "platform": "vercel"
-    })
+        "timestamp": datetime.utcnow().isoformat(),
+        "platform": "vercel",
+        "checks": {}
+    }
 
+    # Check PostgreSQL
+    if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
+        try:
+            db = get_db()
+            db.execute(text("SELECT 1"))
+            db.close()
+            result["checks"]["database"] = "ok"
+        except Exception as e:
+            result["checks"]["database"] = f"error: {str(e)}"
+            result["status"] = "unhealthy"
+    else:
+        result["checks"]["database"] = "not configured"
 
-@app.route("/simulator")
-def simulator():
-    return render_template("simulator.html")
+    # Check Redis
+    if redis_client:
+        try:
+            redis_client.ping()
+            result["checks"]["redis"] = "ok"
+        except Exception as e:
+            result["checks"]["redis"] = f"error: {str(e)}"
+            result["status"] = "unhealthy"
+    else:
+        result["checks"]["redis"] = "not configured"
+
+    return jsonify(result)
 
 
 @app.route("/calls", methods=["GET", "POST"])
@@ -212,7 +277,6 @@ def call_history(phone_number):
     """Get call history for a specific phone number."""
     db = get_db()
 
-    # Clean phone number
     phone = phone_number.strip().replace(" ", "")
     if not phone.startswith("+"):
         phone = "+" + phone
@@ -227,6 +291,34 @@ def call_history(phone_number):
         "phone_number": phone,
         "total_calls": len(calls),
         "calls": [c.to_dict() for c in calls]
+    })
+
+
+@app.route("/sessions")
+def list_sessions():
+    """List all active call sessions in Redis."""
+    if not redis_client:
+        return jsonify({"error": "Redis not configured"}), 503
+
+    keys = redis_client.keys("session:*")
+    sessions = []
+
+    for key in keys:
+        caller_id = key.decode().replace("session:", "")
+        data = redis_client.get(key)
+        ttl = redis_client.ttl(key)
+
+        if data:
+            session_data = json.loads(data.decode())
+            sessions.append({
+                "caller_id": caller_id,
+                "session": session_data,
+                "ttl_remaining": ttl
+            })
+
+    return jsonify({
+        "count": len(sessions),
+        "sessions": sessions
     })
 
 
