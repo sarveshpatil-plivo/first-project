@@ -203,6 +203,16 @@ def call_status():
     return "", 200
 
 
+@app.route("/voice/test", methods=["GET", "POST"])
+def test_voice():
+    """Simple test - just speak and hang up."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>Hello! This is a test. If you can hear this, the system is working.</Speak>
+</Response>"""
+    return xml_response(xml)
+
+
 # ============ API Routes ============
 
 @app.route("/")
