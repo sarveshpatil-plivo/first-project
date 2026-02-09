@@ -205,12 +205,10 @@ def call_status():
 
 @app.route("/voice/test", methods=["GET", "POST"])
 def test_voice():
-    """Simple test - wait then speak."""
+    """Test with Play instead of Speak."""
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Wait length="3"/>
-    <Speak voice="WOMAN" language="en-US">Hello! This is a test message.</Speak>
-    <Wait length="5"/>
+    <Play>https://s3.amazonaws.com/plivosamplexml/ivr_audio.mp3</Play>
 </Response>"""
     return xml_response(xml)
 
