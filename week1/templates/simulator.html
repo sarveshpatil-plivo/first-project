@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IVR Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .phone {
+            background: #0f0f1a;
+            border-radius: 40px;
+            padding: 20px;
+            width: 320px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        }
+        .screen {
+            background: #1a1a2e;
+            border-radius: 20px;
+            padding: 20px;
+            min-height: 200px;
+            margin-bottom: 20px;
+        }
+        .status {
+            text-align: center;
+            color: #4ade80;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .status.disconnected {
+            color: #f87171;
+        }
+        .status.speaking {
+            color: #fbbf24;
+        }
+        .message {
+            background: #252540;
+            border-radius: 12px;
+            padding: 15px;
+            color: #e2e8f0;
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            min-height: 80px;
+        }
+        .speaker-icon {
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .speaker-icon.active {
+            animation: pulse 0.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .key {
+            background: #252540;
+            border: none;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+        }
+        .key:hover:not(:disabled) {
+            background: #3b3b5c;
+            transform: scale(1.05);
+        }
+        .key:active:not(:disabled) {
+            background: #4ade80;
+            transform: scale(0.95);
+        }
+        .key:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        .key small {
+            font-size: 8px;
+            color: #888;
+            margin-top: 2px;
+        }
+        .call-btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .call-btn.start {
+            background: #4ade80;
+            color: #0f0f1a;
+        }
+        .call-btn.end {
+            background: #f87171;
+            color: white;
+        }
+        .call-btn:hover {
+            transform: scale(1.02);
+            filter: brightness(1.1);
+        }
+        .call-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .log {
+            margin-top: 20px;
+            background: #252540;
+            border-radius: 12px;
+            padding: 15px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .log h4 {
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+        .log-entry {
+            font-size: 12px;
+            color: #4ade80;
+            margin-bottom: 5px;
+            font-family: monospace;
+        }
+        .log-entry.user {
+            color: #60a5fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone">
+        <div class="screen">
+            <div class="status" id="status">Ready to call</div>
+            <div class="message" id="message">
+                Press the green button to start a simulated call to the IVR system.
+            </div>
+        </div>
+
+        <div class="keypad">
+            <button class="key" onclick="pressKey('1')" disabled>1<small>ABC</small></button>
+            <button class="key" onclick="pressKey('2')" disabled>2<small>DEF</small></button>
+            <button class="key" onclick="pressKey('3')" disabled>3<small>GHI</small></button>
+            <button class="key" onclick="pressKey('4')" disabled>4<small>JKL</small></button>
+            <button class="key" onclick="pressKey('5')" disabled>5<small>MNO</small></button>
+            <button class="key" onclick="pressKey('6')" disabled>6<small>PQR</small></button>
+            <button class="key" onclick="pressKey('7')" disabled>7<small>STU</small></button>
+            <button class="key" onclick="pressKey('8')" disabled>8<small>VWX</small></button>
+            <button class="key" onclick="pressKey('9')" disabled>9<small>YZ</small></button>
+            <button class="key" onclick="pressKey('*')" disabled>*</button>
+            <button class="key" onclick="pressKey('0')" disabled>0</button>
+            <button class="key" onclick="pressKey('#')" disabled>#</button>
+        </div>
+
+        <button class="call-btn start" id="callBtn" onclick="toggleCall()">
+            📞 Start Call
+        </button>
+
+        <div class="log">
+            <h4>Call Log</h4>
+            <div id="logEntries"></div>
+        </div>
+    </div>
+
+    <script>
+        let inCall = false;
+        let currentAction = '/voice/incoming';
+        let isSpeaking = false;
+        let pendingHangup = false;
+
+        // Text-to-speech - returns a Promise that resolves when done speaking
+        function speak(text) {
+            return new Promise((resolve) => {
+                if (!text) {
+                    resolve();
+                    return;
+                }
+
+                isSpeaking = true;
+                document.querySelector('.speaker-icon')?.classList.add('active');
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 0.95;
+                utterance.pitch = 1;
+                utterance.volume = 1;
+
+                // Try to use a good voice
+                const voices = window.speechSynthesis.getVoices();
+                const preferredVoice = voices.find(v =>
+                    v.name.includes('Samantha') ||
+                    v.name.includes('Karen') ||
+                    v.name.includes('Google UK English Female') ||
+                    v.name.includes('Microsoft Zira')
+                );
+                if (preferredVoice) {
+                    utterance.voice = preferredVoice;
+                }
+
+                utterance.onend = () => {
+                    isSpeaking = false;
+                    document.querySelector('.speaker-icon')?.classList.remove('active');
+                    if (inCall && !pendingHangup) {
+                        setStatus('Connected - Press a key', true);
+                    }
+                    resolve();
+                };
+
+                utterance.onerror = () => {
+                    isSpeaking = false;
+                    resolve();
+                };
+
+                // Set status to show user can interrupt
+                if (inCall) {
+                    setStatus('Speaking... (press a key to interrupt)', true);
+                }
+
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        // Load voices
+        window.speechSynthesis.getVoices();
+        window.speechSynthesis.onvoiceschanged = () => {
+            window.speechSynthesis.getVoices();
+        };
+
+        function log(message, isUser = false) {
+            const entries = document.getElementById('logEntries');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry' + (isUser ? ' user' : '');
+            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            entries.insertBefore(entry, entries.firstChild);
+        }
+
+        function setMessage(text) {
+            document.getElementById('message').innerHTML =
+                '<span class="speaker-icon">🔊</span>' + text;
+        }
+
+        function setStatus(text, connected = true) {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = 'status' + (connected ? '' : ' disconnected');
+        }
+
+        function enableKeypad(enabled) {
+            document.querySelectorAll('.key').forEach(key => {
+                key.disabled = !enabled;
+            });
+        }
+
+        function parseXML(xmlText) {
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(xmlText, 'text/xml');
+
+            let message = '';
+            let hasGetDigits = false;
+            let nextAction = null;
+
+            const response = xml.querySelector('Response');
+            if (!response) return { message: '', hasGetDigits: false, nextAction: null, shouldHangup: true };
+
+            // Get direct Speak children of Response (not inside GetDigits)
+            response.childNodes.forEach(node => {
+                if (node.nodeName === 'Speak') {
+                    message += node.textContent.trim() + ' ';
+                }
+            });
+
+            // Check for GetDigits and get its Speak content
+            const getDigits = xml.querySelector('GetDigits');
+            if (getDigits) {
+                hasGetDigits = true;
+                nextAction = getDigits.getAttribute('action');
+                getDigits.querySelectorAll('Speak').forEach(speakEl => {
+                    message += speakEl.textContent.trim() + ' ';
+                });
+            }
+
+            // Check for Hangup
+            const hangup = xml.querySelector('Hangup');
+
+            return {
+                message: message.trim(),
+                hasGetDigits,
+                nextAction,
+                shouldHangup: !!hangup && !hasGetDigits
+            };
+        }
+
+        async function makeRequest(url, digits = null) {
+            const formData = new FormData();
+            formData.append('From', '+919448678165');
+            formData.append('To', '+1234567890');
+            formData.append('CallUUID', 'sim-' + Date.now());
+            if (digits) {
+                formData.append('Digits', digits);
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                body: formData
+            });
+
+            return await response.text();
+        }
+
+        async function toggleCall() {
+            const btn = document.getElementById('callBtn');
+
+            if (!inCall) {
+                // Start call
+                inCall = true;
+                pendingHangup = false;
+                btn.textContent = '📵 End Call';
+                btn.className = 'call-btn end';
+                setStatus('Connecting...', true);
+                log('Call started');
+
+                // Make initial request
+                try {
+                    const xml = await makeRequest(currentAction);
+                    const result = parseXML(xml);
+                    setMessage(result.message);
+                    log('IVR: ' + result.message.substring(0, 50) + '...');
+
+                    if (result.nextAction) {
+                        currentAction = result.nextAction;
+                    }
+
+                    // Enable keypad immediately so user can interrupt
+                    enableKeypad(true);
+
+                    // Speak the message and wait for it to finish
+                    await speak(result.message);
+
+                    if (result.shouldHangup) {
+                        pendingHangup = true;
+                        endCall();
+                    }
+                } catch (err) {
+                    setMessage('Error connecting to IVR server. Is Flask running?');
+                    log('Error: ' + err.message);
+                    enableKeypad(false);
+                }
+            } else {
+                // End call immediately
+                window.speechSynthesis.cancel();
+                endCall();
+            }
+        }
+
+        function endCall() {
+            inCall = false;
+            pendingHangup = false;
+            isSpeaking = false;
+            const btn = document.getElementById('callBtn');
+            btn.textContent = '📞 Start Call';
+            btn.className = 'call-btn start';
+            setStatus('Call ended', false);
+            setMessage('Call disconnected. Press the green button to call again.');
+            log('Call ended');
+            enableKeypad(false);
+            currentAction = '/voice/incoming';
+        }
+
+        async function pressKey(digit) {
+            if (!inCall) return;
+
+            // Cancel any ongoing speech (barge-in)
+            if (isSpeaking) {
+                window.speechSynthesis.cancel();
+                isSpeaking = false;
+            }
+
+            log('You pressed: ' + digit, true);
+
+            try {
+                const xml = await makeRequest(currentAction, digit);
+                const result = parseXML(xml);
+                setMessage(result.message);
+                log('IVR: ' + result.message.substring(0, 50) + '...');
+
+                if (result.nextAction) {
+                    currentAction = result.nextAction;
+                }
+
+                // Speak and wait for completion
+                await speak(result.message);
+
+                if (result.shouldHangup) {
+                    pendingHangup = true;
+                    endCall();
+                }
+            } catch (err) {
+                setMessage('Error: ' + err.message);
+            }
+        }
+    </script>
+</body>
+</html>

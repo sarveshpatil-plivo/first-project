@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IVR Outbound Call</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid #334155;
+            border-radius: 24px;
+            padding: 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.4);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .phone-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 28px;
+            box-shadow: 0 8px 24px rgba(34, 197, 94, 0.3);
+        }
+        h1 {
+            color: #f8fafc;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 24px;
+        }
+        label {
+            display: block;
+            color: #e2e8f0;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .input-wrapper {
+            position: relative;
+        }
+        .input-wrapper::before {
+            content: "";
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 18px;
+        }
+        input[type="tel"] {
+            width: 100%;
+            padding: 16px 16px 16px 16px;
+            border: 2px solid #334155;
+            border-radius: 12px;
+            background: #0f172a;
+            color: #f8fafc;
+            font-size: 18px;
+            font-weight: 500;
+            transition: all 0.2s;
+            letter-spacing: 0.5px;
+        }
+        input[type="tel"]:focus {
+            outline: none;
+            border-color: #22c55e;
+            box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+        }
+        input[type="tel"]::placeholder {
+            color: #64748b;
+        }
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: #0f172a;
+            border-radius: 12px;
+            border: 1px solid #334155;
+        }
+        .toggle-label {
+            display: flex;
+            flex-direction: column;
+        }
+        .toggle-label span:first-child {
+            color: #e2e8f0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .toggle-label span:last-child {
+            color: #64748b;
+            font-size: 12px;
+            margin-top: 2px;
+        }
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+        }
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #334155;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+        .toggle-slider::before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: #f8fafc;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .toggle input:checked + .toggle-slider {
+            background: #22c55e;
+        }
+        .toggle input:checked + .toggle-slider::before {
+            transform: translateX(22px);
+        }
+        .server-indicator {
+            text-align: center;
+            padding: 12px;
+            background: rgba(34, 197, 94, 0.1);
+            border-radius: 8px;
+            margin-bottom: 24px;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+        .server-indicator.local {
+            background: rgba(251, 191, 36, 0.1);
+            border-color: rgba(251, 191, 36, 0.2);
+        }
+        .server-indicator span {
+            color: #22c55e;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .server-indicator.local span {
+            color: #fbbf24;
+        }
+        .call-btn {
+            width: 100%;
+            padding: 18px;
+            border: none;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 8px 24px rgba(34, 197, 94, 0.3);
+        }
+        .call-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 28px rgba(34, 197, 94, 0.4);
+        }
+        .call-btn:active {
+            transform: translateY(0);
+        }
+        .call-btn:disabled {
+            background: #334155;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .call-btn.calling {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            box-shadow: 0 8px 24px rgba(245, 158, 11, 0.3);
+        }
+        .call-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+            display: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status.success {
+            display: block;
+            background: rgba(34, 197, 94, 0.15);
+            color: #4ade80;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .status.error {
+            display: block;
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .info {
+            margin-top: 28px;
+            padding-top: 24px;
+            border-top: 1px solid #334155;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+        }
+        .info-row:not(:last-child) {
+            border-bottom: 1px solid #1e293b;
+        }
+        .info-label {
+            color: #64748b;
+            font-size: 13px;
+        }
+        .info-value {
+            color: #e2e8f0;
+            font-size: 13px;
+            font-weight: 500;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="phone-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+            </div>
+            <h1>IVR Outbound Call</h1>
+            <p class="subtitle">Test your IVR system with a real phone call</p>
+        </div>
+
+        <div class="server-indicator" id="serverIndicator">
+            <span>Using Vercel Cloud (demo-ivr.vercel.app)</span>
+        </div>
+
+        <div class="form-group">
+            <label for="phone">Your Phone Number</label>
+            <div class="input-wrapper">
+                <input
+                    type="tel"
+                    id="phone"
+                    placeholder="+91 94486 78165"
+                    value="+919448678165"
+                >
+            </div>
+        </div>
+
+        <div class="form-group">
+            <div class="toggle-group">
+                <div class="toggle-label">
+                    <span>Use Local Server</span>
+                    <span>Switch to ngrok for local testing</span>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="useLocal" onchange="updateServerIndicator()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <button class="call-btn" id="callBtn" onclick="makeCall()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+            Call Me Now
+        </button>
+
+        <div class="status" id="status"></div>
+
+        <div class="info">
+            <div class="info-row">
+                <span class="info-label">From Number</span>
+                <span class="info-value">+91 80354 53216</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">IVR Menu</span>
+                <span class="info-value">1: Sales, 2: Support, 3: Repeat</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function updateServerIndicator() {
+            const useLocal = document.getElementById('useLocal').checked;
+            const indicator = document.getElementById('serverIndicator');
+
+            if (useLocal) {
+                indicator.innerHTML = '<span>Using Local Server (ngrok)</span>';
+                indicator.className = 'server-indicator local';
+            } else {
+                indicator.innerHTML = '<span>Using Vercel Cloud (demo-ivr.vercel.app)</span>';
+                indicator.className = 'server-indicator';
+            }
+        }
+
+        async function makeCall() {
+            const phone = document.getElementById('phone').value.trim();
+            const useLocal = document.getElementById('useLocal').checked;
+            const btn = document.getElementById('callBtn');
+            const status = document.getElementById('status');
+
+            if (!phone) {
+                status.textContent = 'Please enter a phone number';
+                status.className = 'status error';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Calling...';
+            btn.className = 'call-btn calling';
+            status.className = 'status';
+
+            try {
+                const response = await fetch('/make-call', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({phone: phone, use_local: useLocal})
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    status.innerHTML = '<strong>Call initiated!</strong><br>Answer your phone to test the IVR';
+                    status.className = 'status success';
+                } else {
+                    status.textContent = data.error || 'Failed to make call';
+                    status.className = 'status error';
+                }
+            } catch (err) {
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'status error';
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+                Call Me Now
+            `;
+            btn.className = 'call-btn';
+        }
+
+        // Allow Enter key to trigger call
+        document.getElementById('phone').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') makeCall();
+        });
+    </script>
+</body>
+</html>

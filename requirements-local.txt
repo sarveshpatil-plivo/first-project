@@ -1,0 +1,12 @@
+plivo>=4.47.0
+python-dotenv>=1.0.0
+flask>=3.0.0
+redis>=5.0.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+gunicorn>=21.0.0
+openai>=1.0.0
+deepgram-sdk>=3.0.0
+elevenlabs>=1.0.0
+pyaudio>=0.2.14
+pipecat-ai[deepgram,openai,elevenlabs,silero,daily]>=0.0.43
