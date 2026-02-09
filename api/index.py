@@ -8,11 +8,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, jsonify, request, Response
 from dotenv import load_dotenv
+from plivo import plivoxml
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "vercel-secret-key-change-this")
+
+# Base URL for Plivo callbacks
+BASE_URL = os.getenv("BASE_URL", "https://demo-ivr.vercel.app")
 
 # ============ Redis Setup ============
 REDIS_URL = os.getenv("REDIS_URL")
@@ -22,7 +26,6 @@ redis_error = None
 if REDIS_URL:
     try:
         import redis
-        # Use URL as-is (Redis Cloud free tier doesn't require TLS)
         redis_client = redis.from_url(REDIS_URL)
         redis_client.ping()
     except Exception as e:
@@ -85,7 +88,6 @@ if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL:
     def get_db():
         return SessionLocal()
 else:
-    # Mock for serverless without DB
     class CallLog:
         def __init__(self, **kwargs):
             self.id = 1
@@ -110,107 +112,119 @@ else:
         return MockDB()
 
 
-# ============ IVR Routes ============
+# ============ IVR Routes (Using Plivo SDK) ============
 
-def xml_response(xml_content):
-    return Response(xml_content, mimetype="application/xml")
+def xml_response(response_element):
+    """Convert Plivo ResponseElement to Flask Response."""
+    return Response(response_element.to_string(), mimetype="application/xml")
 
 
+@app.route("/api/answer", methods=["GET", "POST"])
 @app.route("/voice/incoming", methods=["GET", "POST"])
-def incoming_call():
+def answer_call():
+    """Plivo calls this when someone dials in."""
     caller = request.values.get("From", "unknown")
 
-    # Log to PostgreSQL
+    # Log call start in PostgreSQL
     db = get_db()
     call = CallLog(caller_number=caller, call_status="answered")
     db.add(call)
     db.commit()
     db.close()
 
-    # Save session to Redis
-    save_session(caller, "greeting")
+    # Store call session in Redis (current step = "main_menu")
+    save_session(caller, "main_menu")
 
-    base_url = "https://demo-ivr.vercel.app"
+    # Build XML response using Plivo SDK
+    response = plivoxml.ResponseElement()
+    response.add(plivoxml.SpeakElement("Welcome to Acme Corp."))
 
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>Welcome to our company.</Speak>
-    <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID.</Speak>
-    </GetDigits>
-    <Speak>We did not receive any input. Goodbye.</Speak>
-</Response>"""
+    get_digits = plivoxml.GetDigitsElement(
+        action=f"{BASE_URL}/api/handle-input",
+        method="POST",
+        timeout=10,
+        num_digits=1
+    )
+    get_digits.add(plivoxml.SpeakElement("Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID."))
+    response.add(get_digits)
 
-    return xml_response(xml)
+    response.add(plivoxml.SpeakElement("We did not receive any input. Goodbye."))
+
+    return xml_response(response)
 
 
+@app.route("/api/handle-input", methods=["GET", "POST"])
 @app.route("/voice/menu", methods=["GET", "POST"])
-def handle_menu():
+def handle_input():
+    """Plivo calls this with digit pressed."""
     digits = request.values.get("Digits", "")
     caller = request.values.get("From", "unknown")
-    base_url = "https://demo-ivr.vercel.app"
+
+    response = plivoxml.ResponseElement()
 
     if digits == "1":
+        # Update session and call log
         save_session(caller, "routed_sales")
-        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>You pressed 1 for Sales. Our sales team is available Monday through Friday, 9 AM to 5 PM. Thank you for your interest.</Speak>
-    <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>To return to the main menu, press any key. Or hang up to end the call.</Speak>
-    </GetDigits>
-    <Speak>Goodbye.</Speak>
-</Response>"""
+        update_call_status(caller, "routed_sales")
+
+        response.add(plivoxml.SpeakElement("Connecting to sales. Goodbye."))
 
     elif digits == "2":
+        # Update session and call log
         save_session(caller, "routed_support")
-        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>You pressed 2 for Support. For urgent issues, please email support at support@example.com. A team member will respond within 24 hours.</Speak>
-    <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>To return to the main menu, press any key. Or hang up to end the call.</Speak>
-    </GetDigits>
-    <Speak>Goodbye.</Speak>
-</Response>"""
+        update_call_status(caller, "routed_support")
+
+        response.add(plivoxml.SpeakElement("Connecting to support. Goodbye."))
 
     elif digits == "3":
+        # Read caller's phone number back
         save_session(caller, "caller_id_readback")
         phone_for_speech = " ".join(caller.replace("+", ""))
-        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>Your caller ID is {phone_for_speech}.</Speak>
-    <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID again.</Speak>
-    </GetDigits>
-    <Speak>We did not receive any input. Goodbye.</Speak>
-</Response>"""
+
+        response.add(plivoxml.SpeakElement(f"Your caller ID is {phone_for_speech}."))
+
+        get_digits = plivoxml.GetDigitsElement(
+            action=f"{BASE_URL}/api/handle-input",
+            method="POST",
+            timeout=10,
+            num_digits=1
+        )
+        get_digits.add(plivoxml.SpeakElement("Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID again."))
+        response.add(get_digits)
+        response.add(plivoxml.SpeakElement("We did not receive any input. Goodbye."))
 
     else:
+        # Invalid input - redirect back to /api/answer
         save_session(caller, "invalid_input")
-        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>Invalid option. Please try again.</Speak>
-    <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID.</Speak>
-    </GetDigits>
-    <Speak>Goodbye.</Speak>
-</Response>"""
 
-    return xml_response(xml)
+        response.add(plivoxml.SpeakElement("Invalid option."))
+        response.add(plivoxml.RedirectElement(f"{BASE_URL}/api/answer"))
+
+    return xml_response(response)
+
+
+def update_call_status(caller, status):
+    """Update call log with status."""
+    if "postgresql" not in DATABASE_URL and "postgres" not in DATABASE_URL:
+        return
+
+    try:
+        db = get_db()
+        call = db.query(CallLog).filter(
+            CallLog.caller_number == caller
+        ).order_by(CallLog.created_at.desc()).first()
+        if call:
+            call.call_status = status
+            db.commit()
+        db.close()
+    except:
+        pass
 
 
 @app.route("/voice/status", methods=["GET", "POST"])
 def call_status():
+    """Receive call status updates from Plivo."""
     return "", 200
-
-
-@app.route("/voice/test", methods=["GET", "POST"])
-def test_voice():
-    """Simple test endpoint."""
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Speak>Hello! This is a test call from your IVR system.</Speak>
-</Response>"""
-    return xml_response(xml)
 
 
 # ============ API Routes ============
@@ -223,16 +237,16 @@ def home():
         "endpoints": {
             "/": "This page",
             "/health": "Health check with Redis & DB status",
-            "/voice/incoming": "Plivo webhook for incoming calls",
-            "/voice/menu": "Plivo webhook for menu handling",
-            "/calls": "View call logs",
-            "/call-history/<phone>": "Get calls from specific number",
+            "/api/answer": "Plivo webhook for incoming calls",
+            "/api/handle-input": "Plivo webhook for digit input",
+            "/api/call-history/<phone>": "Get calls from specific number",
             "/sessions": "View active Redis sessions"
         }
     })
 
 
 @app.route("/health")
+@app.route("/api/health")
 def health():
     result = {
         "status": "healthy",
@@ -271,6 +285,8 @@ def health():
 
 
 @app.route("/calls", methods=["GET", "POST"])
+@app.route("/api/log-call", methods=["POST"])
+@app.route("/api/call-logs", methods=["GET"])
 def calls():
     db = get_db()
 
@@ -288,6 +304,7 @@ def calls():
 
 
 @app.route("/call-history/<phone_number>")
+@app.route("/api/call-history/<phone_number>")
 def call_history(phone_number):
     """Get call history for a specific phone number."""
     db = get_db()
