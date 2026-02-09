@@ -22,11 +22,8 @@ redis_error = None
 if REDIS_URL:
     try:
         import redis
-        # Redis Cloud requires SSL - convert redis:// to rediss:// if needed
-        url = REDIS_URL
-        if "redislabs.com" in url and url.startswith("redis://"):
-            url = url.replace("redis://", "rediss://", 1)
-        redis_client = redis.from_url(url)
+        # Use URL as-is (Redis Cloud free tier doesn't require TLS)
+        redis_client = redis.from_url(REDIS_URL)
         redis_client.ping()
     except Exception as e:
         redis_error = str(e)
