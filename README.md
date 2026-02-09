@@ -1,6 +1,7 @@
 # Voice IVR Project
 
 An enterprise-grade Voice IVR platform powered by AI and cloud telephony.
+A production-ready Voice IVR system with AI capabilities.
 
 ## Features
 
