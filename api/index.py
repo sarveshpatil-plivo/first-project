@@ -309,12 +309,12 @@ def call_history(phone_number):
     """Get call history for a specific phone number."""
     db = get_db()
 
-    phone = phone_number.strip().replace(" ", "")
-    if not phone.startswith("+"):
-        phone = "+" + phone
+    # Clean phone number - remove spaces and +
+    phone = phone_number.strip().replace(" ", "").replace("+", "")
 
+    # Search for phone number in any format (with/without +, with/without space)
     calls = db.query(CallLog).filter(
-        CallLog.caller_number == phone
+        CallLog.caller_number.like(f"%{phone}%")
     ).order_by(CallLog.created_at.desc()).limit(50).all()
 
     db.close()
