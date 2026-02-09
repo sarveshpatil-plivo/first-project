@@ -134,11 +134,11 @@ def incoming_call():
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Speak>Welcome to our company.</Speak>
+    <Speak voice="Polly.Aditi" language="en-IN">Welcome to our company.</Speak>
     <GetDigits action="{base_url}/voice/menu" method="POST" timeout="10" numDigits="1" retries="2">
-        <Speak>Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID.</Speak>
+        <Speak voice="Polly.Aditi" language="en-IN">Press 1 for Sales. Press 2 for Support. Press 3 to hear your caller ID.</Speak>
     </GetDigits>
-    <Speak>We did not receive any input. Goodbye.</Speak>
+    <Speak voice="Polly.Aditi" language="en-IN">We did not receive any input. Goodbye.</Speak>
 </Response>"""
 
     return xml_response(xml)
