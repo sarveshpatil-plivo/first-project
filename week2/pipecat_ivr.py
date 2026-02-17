@@ -29,6 +29,42 @@ PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
 app = FastAPI(title="Pipecat IVR Integration")
 
 
+# OpenAI TTS helper function
+async def generate_tts_audio(text: str) -> bytes:
+    """Generate TTS audio using OpenAI and convert to mulaw for Plivo."""
+    import httpx
+    import io
+    from pydub import AudioSegment
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.openai.com/v1/audio/speech",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "tts-1",
+                "input": text,
+                "voice": "nova",  # Options: alloy, echo, fable, onyx, nova, shimmer
+                "response_format": "mp3"
+            },
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            print(f"OpenAI TTS error: {response.status_code} - {response.text}", flush=True)
+            return None
+
+        # Convert MP3 to mulaw 8kHz for Plivo
+        audio_seg = AudioSegment.from_mp3(io.BytesIO(response.content))
+        audio_seg = audio_seg.set_frame_rate(8000).set_channels(1)
+        mulaw_buf = io.BytesIO()
+        audio_seg.export(mulaw_buf, format="wav", codec="pcm_mulaw")
+        mulaw_buf.seek(44)  # Skip WAV header
+        return mulaw_buf.read()
+
+
 # ============ KNOWLEDGE BASE ============
 # Add your company info, FAQs, product details here
 
@@ -332,6 +368,7 @@ async def websocket_handler(websocket: WebSocket):
 
     import json
     import base64
+    import time
     from openai import OpenAI
     import httpx
     import io
@@ -510,32 +547,27 @@ EXIT DETECTION (IMPORTANT):
                 greeting = "Hello! I'm your AI assistant. How can I help you today?"
                 print(f"AI: {greeting}", flush=True)
 
-                # Generate greeting audio with ElevenLabs (mulaw format for Plivo)
-                tts_url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-                headers = {
-                    "Accept": "audio/mpeg",
-                    "Content-Type": "application/json",
-                    "xi-api-key": ELEVENLABS_API_KEY
-                }
-                tts_data = {
-                    "text": greeting,
-                    "model_id": "eleven_turbo_v2_5",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                }
-
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(tts_url, json=tts_data, headers=headers, timeout=30)
-                    if response.status_code == 200:
-                        print("Greeting audio generated, sending to caller...", flush=True)
-                        # Note: Plivo expects mulaw 8kHz. ElevenLabs returns MP3.
-                        # For full audio playback, we'd need audio conversion (ffmpeg/pydub)
-                        # For now, we'll skip sending and just acknowledge receipt
-                        # TODO: Add proper MP3 to mulaw conversion
-                    else:
-                        print(f"TTS error: {response.status_code}", flush=True)
+                # Generate greeting audio with OpenAI TTS
+                mulaw_data = await generate_tts_audio(greeting)
+                if mulaw_data:
+                    print(f"Greeting audio: {len(mulaw_data)} bytes, sending...", flush=True)
+                    is_speaking = True
+                    for i in range(0, len(mulaw_data), 640):
+                        chunk = mulaw_data[i:i+640]
+                        if chunk:
+                            await websocket.send_text(json.dumps({
+                                "event": "playAudio",
+                                "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                                          "payload": base64.b64encode(chunk).decode("utf-8")}
+                            }))
+                            await asyncio.sleep(0.04)
+                    is_speaking = False
+                    last_response_time = time.time()
+                    print("Greeting sent!", flush=True)
+                else:
+                    print("Failed to generate greeting audio", flush=True)
 
             elif event == "media":
-                import time
                 media = message.get("media", {})
                 payload = media.get("payload", "")
 
@@ -670,32 +702,18 @@ EXIT DETECTION (IMPORTANT):
                                     goodbye_msg = "Thank you for calling! Goodbye and have a great day!"
                                     print(f"AI: {goodbye_msg}", flush=True)
 
-                                    tts_url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-                                    tts_headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": ELEVENLABS_API_KEY}
-
                                     try:
-                                        async with httpx.AsyncClient() as http_client:
-                                            tts_resp = await http_client.post(tts_url, json={
-                                                "text": goodbye_msg, "model_id": "eleven_turbo_v2_5",
-                                                "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                                            }, headers=tts_headers, timeout=30)
-                                            if tts_resp.status_code == 200:
-                                                from pydub import AudioSegment
-                                                audio_seg = AudioSegment.from_mp3(io.BytesIO(tts_resp.content))
-                                                audio_seg = audio_seg.set_frame_rate(8000).set_channels(1)
-                                                mulaw_buf = io.BytesIO()
-                                                audio_seg.export(mulaw_buf, format="wav", codec="pcm_mulaw")
-                                                mulaw_buf.seek(44)
-                                                mulaw_data = mulaw_buf.read()  # Read all data first
-                                                for i in range(0, len(mulaw_data), 640):
-                                                    chunk = mulaw_data[i:i+640]
-                                                    if chunk:
-                                                        await websocket.send_text(json.dumps({
-                                                            "event": "playAudio",
-                                                            "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
-                                                                      "payload": base64.b64encode(chunk).decode("utf-8")}
-                                                        }))
-                                                        await asyncio.sleep(0.04)
+                                        mulaw_data = await generate_tts_audio(goodbye_msg)
+                                        if mulaw_data:
+                                            for i in range(0, len(mulaw_data), 640):
+                                                chunk = mulaw_data[i:i+640]
+                                                if chunk:
+                                                    await websocket.send_text(json.dumps({
+                                                        "event": "playAudio",
+                                                        "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                                                                  "payload": base64.b64encode(chunk).decode("utf-8")}
+                                                    }))
+                                                    await asyncio.sleep(0.04)
                                     except Exception as e:
                                         print(f"Error sending goodbye audio: {e}", flush=True)
 
@@ -717,36 +735,21 @@ EXIT DETECTION (IMPORTANT):
                                 ask_msg = "Before I let you go, do you have any other questions?"
                                 print(f"AI: {ask_msg}", flush=True)
 
-                                tts_url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-                                tts_headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": ELEVENLABS_API_KEY}
-
-                                async with httpx.AsyncClient() as http_client:
-                                    tts_resp = await http_client.post(tts_url, json={
-                                        "text": ask_msg, "model_id": "eleven_turbo_v2_5",
-                                        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                                    }, headers=tts_headers, timeout=30)
-                                    if tts_resp.status_code == 200:
-                                        from pydub import AudioSegment
-                                        audio_seg = AudioSegment.from_mp3(io.BytesIO(tts_resp.content))
-                                        audio_seg = audio_seg.set_frame_rate(8000).set_channels(1)
-                                        mulaw_buf = io.BytesIO()
-                                        audio_seg.export(mulaw_buf, format="wav", codec="pcm_mulaw")
-                                        mulaw_buf.seek(44)
-                                        mulaw_data = mulaw_buf.read()
-
-                                        is_speaking = True
-                                        audio_buffer.clear()
-                                        for i in range(0, len(mulaw_data), 640):
-                                            chunk = mulaw_data[i:i + 640]
-                                            await websocket.send_text(json.dumps({
-                                                "event": "playAudio",
-                                                "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
-                                                          "payload": base64.b64encode(chunk).decode("utf-8")}
-                                            }))
-                                            await asyncio.sleep(0.04)
-                                        is_speaking = False
-                                        last_response_time = time.time()
-                                        audio_buffer.clear()
+                                mulaw_data = await generate_tts_audio(ask_msg)
+                                if mulaw_data:
+                                    is_speaking = True
+                                    audio_buffer.clear()
+                                    for i in range(0, len(mulaw_data), 640):
+                                        chunk = mulaw_data[i:i + 640]
+                                        await websocket.send_text(json.dumps({
+                                            "event": "playAudio",
+                                            "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                                                      "payload": base64.b64encode(chunk).decode("utf-8")}
+                                        }))
+                                        await asyncio.sleep(0.04)
+                                    is_speaking = False
+                                    last_response_time = time.time()
+                                    audio_buffer.clear()
 
                                 print("Waiting for user's response to 'any other questions'...", flush=True)
                                 continue  # Go back to listening
@@ -821,35 +824,21 @@ EXIT DETECTION (IMPORTANT):
                                     goodbye_sequence_msg = "Before I let you go, do you have any other questions?"
                                     print(f"AI: {goodbye_sequence_msg}", flush=True)
 
-                                    tts_url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-                                    tts_headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": ELEVENLABS_API_KEY}
-
-                                    async with httpx.AsyncClient() as http_client:
-                                        tts_resp = await http_client.post(tts_url, json={
-                                            "text": goodbye_sequence_msg, "model_id": "eleven_turbo_v2_5",
-                                            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                                        }, headers=tts_headers, timeout=30)
-                                        if tts_resp.status_code == 200:
-                                            from pydub import AudioSegment
-                                            audio_seg = AudioSegment.from_mp3(io.BytesIO(tts_resp.content))
-                                            audio_seg = audio_seg.set_frame_rate(8000).set_channels(1)
-                                            mulaw_buf = io.BytesIO()
-                                            audio_seg.export(mulaw_buf, format="wav", codec="pcm_mulaw")
-                                            mulaw_buf.seek(44)
-                                            mulaw_data = mulaw_buf.read()
-                                            is_speaking = True
-                                            audio_buffer.clear()
-                                            for i in range(0, len(mulaw_data), 640):
-                                                chunk = mulaw_data[i:i + 640]
-                                                await websocket.send_text(json.dumps({
-                                                    "event": "playAudio",
-                                                    "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
-                                                              "payload": base64.b64encode(chunk).decode("utf-8")}
-                                                }))
-                                                await asyncio.sleep(0.04)
-                                            is_speaking = False
-                                            last_response_time = time.time()
-                                            audio_buffer.clear()
+                                    mulaw_data = await generate_tts_audio(goodbye_sequence_msg)
+                                    if mulaw_data:
+                                        is_speaking = True
+                                        audio_buffer.clear()
+                                        for i in range(0, len(mulaw_data), 640):
+                                            chunk = mulaw_data[i:i + 640]
+                                            await websocket.send_text(json.dumps({
+                                                "event": "playAudio",
+                                                "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                                                          "payload": base64.b64encode(chunk).decode("utf-8")}
+                                            }))
+                                            await asyncio.sleep(0.04)
+                                        is_speaking = False
+                                        last_response_time = time.time()
+                                        audio_buffer.clear()
 
                                     print("Waiting for user's response (LLM exit)...", flush=True)
                                     continue  # Go back to listening for user response
@@ -858,89 +847,37 @@ EXIT DETECTION (IMPORTANT):
 
                                 # Generate and send TTS audio
                                 print("Generating TTS audio...", flush=True)
-                                tts_url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-                                tts_headers = {
-                                    "Accept": "audio/mpeg",
-                                    "Content-Type": "application/json",
-                                    "xi-api-key": ELEVENLABS_API_KEY
-                                }
-                                tts_payload = {
-                                    "text": ai_response,
-                                    "model_id": "eleven_turbo_v2_5",
-                                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-                                }
+                                mulaw_audio = await generate_tts_audio(ai_response)
+                                if mulaw_audio:
+                                    print(f"Mulaw audio: {len(mulaw_audio)} bytes", flush=True)
 
-                                async with httpx.AsyncClient() as http_client:
-                                    tts_response = await http_client.post(tts_url, json=tts_payload, headers=tts_headers, timeout=30)
-                                    if tts_response.status_code == 200:
-                                        mp3_audio = tts_response.content
-                                        print(f"TTS audio: {len(mp3_audio)} bytes MP3", flush=True)
+                                    # Mark as speaking and clear buffer
+                                    is_speaking = True
+                                    audio_buffer.clear()
 
-                                        # Convert MP3 to mulaw using pydub
-                                        try:
-                                            from pydub import AudioSegment
+                                    # Send audio chunks to Plivo
+                                    chunk_size = 640
+                                    total_chunks = len(mulaw_audio) // chunk_size
+                                    print(f"Sending {total_chunks} audio chunks...", flush=True)
 
-                                            # Load MP3
-                                            audio_segment = AudioSegment.from_mp3(io.BytesIO(mp3_audio))
+                                    for i in range(0, len(mulaw_audio), chunk_size):
+                                        chunk = mulaw_audio[i:i + chunk_size]
+                                        await websocket.send_text(json.dumps({
+                                            "event": "playAudio",
+                                            "media": {
+                                                "contentType": "audio/x-mulaw",
+                                                "sampleRate": 8000,
+                                                "payload": base64.b64encode(chunk).decode("utf-8")
+                                            }
+                                        }))
+                                        await asyncio.sleep(0.04)
 
-                                            # Convert to 8kHz mono
-                                            audio_segment = audio_segment.set_frame_rate(8000).set_channels(1)
-
-                                            # Export as raw mulaw
-                                            mulaw_buffer = io.BytesIO()
-                                            audio_segment.export(mulaw_buffer, format="wav", codec="pcm_mulaw")
-                                            mulaw_buffer.seek(44)  # Skip WAV header
-                                            mulaw_audio = mulaw_buffer.read()
-
-                                            print(f"Mulaw audio: {len(mulaw_audio)} bytes", flush=True)
-
-                                            # Mark as speaking and clear buffer
-                                            is_speaking = True
-                                            audio_buffer.clear()
-
-                                            # Send audio chunks to Plivo (with interruption check)
-                                            chunk_size = 640  # ~80ms at 8kHz
-                                            total_chunks = len(mulaw_audio) // chunk_size
-                                            print(f"Sending {total_chunks} audio chunks...", flush=True)
-
-                                            is_interrupted = False  # Reset interruption flag
-                                            chunks_sent = 0
-
-                                            for i in range(0, len(mulaw_audio), chunk_size):
-                                                # Check for interruption
-                                                if is_interrupted:
-                                                    print(f"Interrupted after {chunks_sent}/{total_chunks} chunks!", flush=True)
-                                                    break
-
-                                                chunk = mulaw_audio[i:i + chunk_size]
-                                                play_message = {
-                                                    "event": "playAudio",
-                                                    "media": {
-                                                        "contentType": "audio/x-mulaw",
-                                                        "sampleRate": 8000,
-                                                        "payload": base64.b64encode(chunk).decode("utf-8")
-                                                    }
-                                                }
-                                                await websocket.send_text(json.dumps(play_message))
-                                                chunks_sent += 1
-                                                await asyncio.sleep(0.04)  # Pace the audio
-
-                                            # Done speaking - update timestamp and flag
-                                            is_speaking = False
-                                            last_response_time = time.time()
-                                            audio_buffer.clear()  # Clear any audio received during playback
-
-                                            if is_interrupted:
-                                                print("AI was interrupted, ready to listen...", flush=True)
-                                                is_interrupted = False
-                                                user_is_speaking = True  # User is likely still talking
-                                            else:
-                                                print("Audio sent! Waiting for user...", flush=True)
-
-                                        except Exception as conv_err:
-                                            print(f"Audio conversion error: {conv_err}", flush=True)
-                                    else:
-                                        print(f"TTS error: {tts_response.status_code}", flush=True)
+                                    is_speaking = False
+                                    last_response_time = time.time()
+                                    audio_buffer.clear()
+                                    print("Audio sent! Waiting for user...", flush=True)
+                                else:
+                                    print("TTS failed", flush=True)
 
                                 # Keep conversation manageable
                                 if len(conversation) > 12:

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiveKit Voice Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; }
+        button { padding: 15px 30px; font-size: 18px; margin: 10px; cursor: pointer; }
+        #status { padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .connecting { background: #fff3cd; color: #856404; }
+    </style>
+</head>
+<body>
+    <h1>LiveKit Voice Test</h1>
+
+    <div id="status" class="disconnected">Disconnected</div>
+
+    <button id="connectBtn" onclick="connect()">Connect & Enable Mic</button>
+    <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+
+    <h3>Logs:</h3>
+    <pre id="logs" style="background:#f5f5f5; padding:15px; height:300px; overflow-y:auto;"></pre>
+
+    <script>
+        let room = null;
+
+        function log(msg) {
+            const logs = document.getElementById('logs');
+            logs.textContent += new Date().toLocaleTimeString() + ': ' + msg + '\n';
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        async function connect() {
+            const serverUrl = 'wss://siptrial-p18nhzzn.livekit.cloud';
+            const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzEzMTkzMjEsImlkZW50aXR5IjoidXNlciIsImlzcyI6IkFQSVh4ZFdwRmZQdUEydCIsIm5hbWUiOiJ1c2VyIiwibmJmIjoxNzcxMzE1NzIxLCJzdWIiOiJ1c2VyIiwidmlkZW8iOnsiY2FuUHVibGlzaCI6dHJ1ZSwiY2FuU3Vic2NyaWJlIjp0cnVlLCJyb29tIjoidm9pY2Utcm9vbS0xNzcxMzE1NzE5Iiwicm9vbUpvaW4iOnRydWV9fQ.g72-0Ek5i2BglHImLvxfAw6fdW7c4eXa4UCtsHVBfHA';
+
+            document.getElementById('status').className = 'connecting';
+            document.getElementById('status').textContent = 'Connecting...';
+            log('Connecting to LiveKit...');
+
+            try {
+                room = new LivekitClient.Room();
+
+                room.on('participantConnected', (p) => log('Participant joined: ' + p.identity));
+                room.on('participantDisconnected', (p) => log('Participant left: ' + p.identity));
+                room.on('trackSubscribed', (track, pub, participant) => {
+                    log('Track subscribed: ' + track.kind + ' from ' + participant.identity);
+                    if (track.kind === 'audio') {
+                        const audio = track.attach();
+                        document.body.appendChild(audio);
+                        log('Audio attached - you should hear the agent!');
+                    }
+                });
+
+                await room.connect(serverUrl, token);
+                log('Connected to room: ' + room.name);
+
+                // Enable microphone
+                await room.localParticipant.setMicrophoneEnabled(true);
+                log('Microphone enabled - speak now!');
+
+                document.getElementById('status').className = 'connected';
+                document.getElementById('status').textContent = 'Connected - Mic ON - Speak!';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+
+            } catch (e) {
+                log('Error: ' + e.message);
+                document.getElementById('status').className = 'disconnected';
+                document.getElementById('status').textContent = 'Connection failed';
+            }
+        }
+
+        function disconnect() {
+            if (room) {
+                room.disconnect();
+                log('Disconnected');
+            }
+            document.getElementById('status').className = 'disconnected';
+            document.getElementById('status').textContent = 'Disconnected';
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+        }
+    </script>
+</body>
+</html>
